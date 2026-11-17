@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -19,6 +20,64 @@ _REVIEW_PERMISSIONS = {
     "READ_PHONE_STATE",
     "CALL_PHONE",
 }
+
+_SOURCE_SUFFIXES = {
+    ".java",
+    ".kt",
+    ".smali",
+    ".xml",
+    ".json",
+    ".properties",
+    ".txt",
+    ".yaml",
+    ".yml",
+    ".gradle",
+    ".js",
+    ".html",
+    ".cfg",
+    ".ini",
+}
+_SKIP_DIRECTORIES = {".git", ".gradle", "build", "dist", "node_modules", "__pycache__"}
+_MAX_SOURCE_BYTES = 2 * 1024 * 1024
+_MAX_FINDINGS = 500
+_PROJECT_RULES = (
+    (
+        "alta",
+        "Posible secreto hardcodeado",
+        re.compile(
+            r"""(?i)\b(?:api[_-]?key|client[_-]?secret|password|passwd|token|secret)\b\s*[:=]\s*["'][^"'\s]{4,}["']"""
+        ),
+    ),
+    (
+        "media",
+        "URL HTTP",
+        re.compile(r"""(?i)\bhttp://[^\s"'<>]+"""),
+    ),
+    (
+        "revisar",
+        "Criptografia debil",
+        re.compile(r"""(?i)\b(?:md5|sha-?1|3des|des)\b|aes\s*/\s*ecb"""),
+    ),
+    (
+        "revisar",
+        "Validacion TLS posiblemente debil",
+        re.compile(
+            r"""(?is)(?:checkServerTrusted|verify)\s*\([^)]*\)\s*\{\s*(?:(?:/\*.*?\*/)|(?://[^\n]*))*\s*\}"""
+        ),
+    ),
+    (
+        "revisar",
+        "JavaScript habilitado en WebView",
+        re.compile(r"""(?i)\bsetJavaScriptEnabled\s*\(\s*true\s*\)"""),
+    ),
+    (
+        "revisar",
+        "Acceso a archivos habilitado en WebView",
+        re.compile(
+            r"""(?i)\bset(?:AllowFileAccess|AllowUniversalAccessFromFileURLs)\s*\(\s*true\s*\)"""
+        ),
+    ),
+)
 
 
 def _local_name(name):
@@ -92,6 +151,95 @@ def _collect_urls(analysis):
         if source:
             urls.update(re.findall(r'https?://[^\s"\'<>]+', source))
     return sorted(urls), inspection_errors
+
+
+def revisar_proyecto(ruta_proyecto, json_path=None):
+    root = Path(ruta_proyecto).expanduser()
+    if not root.is_dir():
+        print("[-] Indica una carpeta de proyecto existente.", file=sys.stderr)
+        return False
+
+    findings = []
+    warnings = []
+    scanned_files = 0
+    for current, directories, filenames in os.walk(root, followlinks=False):
+        directories[:] = [
+            name
+            for name in directories
+            if name not in _SKIP_DIRECTORIES
+            and not (Path(current) / name).is_symlink()
+        ]
+        for filename in filenames:
+            path = Path(current) / filename
+            if path.suffix.lower() not in _SOURCE_SUFFIXES or path.is_symlink():
+                continue
+            try:
+                if path.stat().st_size > _MAX_SOURCE_BYTES:
+                    warnings.append(f"{path.relative_to(root)} supera 2 MB; omitido.")
+                    continue
+                content = path.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                warnings.append(f"No se pudo leer {path.relative_to(root)}: {exc}")
+                continue
+
+            scanned_files += 1
+            for severity, category, pattern in _PROJECT_RULES:
+                for match in pattern.finditer(content):
+                    line = content.count("\n", 0, match.start()) + 1
+                    findings.append(
+                        {
+                            "severity": severity,
+                            "category": category,
+                            "file": str(path.relative_to(root)),
+                            "line": line,
+                        }
+                    )
+                    if len(findings) >= _MAX_FINDINGS:
+                        warnings.append(
+                            f"Se alcanzo el limite de {_MAX_FINDINGS} hallazgos."
+                        )
+                        break
+                if len(findings) >= _MAX_FINDINGS:
+                    break
+            if len(findings) >= _MAX_FINDINGS:
+                break
+        if len(findings) >= _MAX_FINDINGS:
+            break
+
+    report = {
+        "project": str(root),
+        "files_scanned": scanned_files,
+        "findings": findings,
+        "warnings": warnings,
+    }
+
+    print(f"\n[+] Revision estatica local: {root}")
+    print(f"Archivos revisados: {scanned_files}")
+    if findings:
+        for finding in findings:
+            print(
+                f"[{finding['severity'].upper()}] {finding['category']}: "
+                f"{finding['file']}:{finding['line']}"
+            )
+    else:
+        print("No se encontraron coincidencias de las reglas incluidas.")
+    for warning in warnings:
+        print(f"[!] {warning}")
+    print("[!] Son coincidencias heuristicas; revisa el codigo y el contexto manualmente.")
+
+    if json_path:
+        output_path = Path(json_path).expanduser()
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(
+                json.dumps(report, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            print(f"[-] No se pudo guardar el JSON: {exc}", file=sys.stderr)
+            return False
+        print(f"[+] Reporte JSON guardado en: {output_path}")
+    return report
 
 
 def analizar_apk(ruta_apk, json_path=None):
@@ -195,4 +343,4 @@ def analizar_apk(ruta_apk, json_path=None):
         print(f"\n[+] Reporte JSON guardado en: {output_path}")
 
     print("\n[+] Analisis estatico terminado; los indicadores requieren validacion manual.")
-    return True
+    return report
