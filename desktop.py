@@ -541,15 +541,7 @@ def launch_desktop(actions):
             "APK ANALYSIS",
             scan_output,
             lambda: actions["analyze"](apk),
-            lambda report: (
-                update_report(report),
-                set_text(scan_output, f"APK: {report.get('apk')}\nPackage: {report.get('package')}\n"
-                                      f"Version: {report.get('version')}\n"
-                                      f"Permissions: {len(report.get('permissions', []))}\n"
-                                      f"Static findings: {len(report.get('findings', []))}")
-            )
-            if isinstance(report, dict)
-            else None,
+            lambda report: update_report(report) if isinstance(report, dict) else None,
         )
 
     make_button(scan_buttons, "RUN STATIC ANALYSIS", analyze_selected_apk, 0, 0)
