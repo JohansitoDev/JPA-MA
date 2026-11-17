@@ -99,7 +99,7 @@ def _decode(apk_path, output_path, capture_output=False):
         return 2
 
     terminal.title(f"\nDecodificando {apk.name}")
-    if not _run_tool(
+    if _run_tool(
         "apktool", ["d", "-f", "-o", destination, apk], capture_output=capture_output
     ):
         terminal.success(f"Proyecto decodificado en: {destination}")

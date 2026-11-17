@@ -139,17 +139,17 @@ def _manifest_findings(manifest):
     return findings
 
 
-def _collect_urls(analysis):
+def _collect_urls(dex_files):
     urls = set()
     inspection_errors = 0
-    for method in analysis.get_methods():
+    for dex_file in dex_files:
         try:
-            source = method.get_source()
+            strings = dex_file.get_strings()
         except (AttributeError, NotImplementedError):
             inspection_errors += 1
             continue
-        if source:
-            urls.update(re.findall(r'https?://[^\s"\'<>]+', source))
+        for value in strings:
+            urls.update(re.findall(r'https?://[^\s"\'<>]+', value))
     return sorted(urls), inspection_errors
 
 
@@ -259,7 +259,7 @@ def analizar_apk(ruta_apk, json_path=None):
 
     print(f"\n[+] Analizando: {apk_path}...")
     try:
-        app, _dex_files, analysis = AnalyzeAPK(str(apk_path))
+        app, dex_files, _analysis = AnalyzeAPK(str(apk_path))
         manifest = app.get_android_manifest_xml()
     except Exception as exc:
         print(f"[-] No se pudo analizar el APK: {exc}", file=sys.stderr)
@@ -282,7 +282,7 @@ def analizar_apk(ruta_apk, json_path=None):
             }
         )
 
-    urls, source_errors = _collect_urls(analysis)
+    urls, dex_errors = _collect_urls(dex_files)
     report = {
         "apk": str(apk_path),
         "package": package_name,
@@ -293,7 +293,7 @@ def analizar_apk(ruta_apk, json_path=None):
         "permissions": permissions,
         "findings": findings,
         "urls": urls[:50],
-        "methods_not_inspected": source_errors,
+        "dex_files_not_inspected": dex_errors,
     }
 
     print("\n=== INFORMACION DE LA APLICACION ===")
@@ -318,7 +318,7 @@ def analizar_apk(ruta_apk, json_path=None):
     else:
         print("No se detectaron los indicadores estaticos incluidos en este analisis.")
 
-    print("\n=== URLS ENCONTRADAS EN CODIGO DECOMPILADO ===")
+    print("\n=== URLS ENCONTRADAS EN CADENAS DEX ===")
     if urls:
         for url in urls[:50]:
             print(f"[*] {url}")
@@ -326,8 +326,8 @@ def analizar_apk(ruta_apk, json_path=None):
             print(f"... y {len(urls) - 50} mas (omitidas en pantalla).")
     else:
         print("No se encontraron URLs en las fuentes disponibles.")
-    if source_errors:
-        print(f"[!] No se pudo inspeccionar el codigo fuente de {source_errors} metodos.")
+    if dex_errors:
+        print(f"[!] No se pudieron leer las cadenas de {dex_errors} archivos DEX.")
 
     if json_path:
         output_path = Path(json_path).expanduser()
